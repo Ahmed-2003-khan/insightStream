@@ -3,84 +3,121 @@ services/rag_service.py
 
 This module is the core of the InsightStream intelligence engine.
 It contains the BasicRAGService class, which is responsible for:
-  1. Embedding textual knowledge into a vector space.
-  2. Storing those vectors in a fast, in-memory FAISS index.
-  3. Retrieving the most semantically relevant pieces of knowledge
-     given a user's query, and using an LLM to synthesize a final answer.
+  1. Embedding textual knowledge into a vector space using OpenAI embeddings.
+  2. Storing and persisting those vectors in a Pinecone index — a managed,
+     cloud-native vector database that survives restarts and scales horizontally.
+  3. Retrieving the most semantically relevant pieces of knowledge given a
+     user's query, and using an LLM to synthesize a final, grounded answer.
 
-This pattern — Retrieval-Augmented Generation (RAG) — grounds the LLM's
-response in specific, curated data rather than relying solely on its
-pre-trained knowledge, which greatly reduces hallucinations.
+Why Pinecone over an in-memory store?
+  An in-memory vector store is useful for prototyping — it is fast and needs
+  zero infrastructure — but it is destroyed whenever the process restarts.
+  Pinecone persists vectors across deployments, supports real-time upserts
+  from multiple sources (e.g., the YouTube ingestion pipeline), and provides
+  sub-millisecond ANN (Approximate Nearest Neighbour) search at scale.
+  This makes it the right choice for a production intelligence engine.
 """
 
 import os
+from typing import List
+
 from dotenv import load_dotenv
 
-# LangChain's document schema. Even though our raw data is plain strings,
-# FAISS works with Document objects so we convert our strings into this format.
-# Note: In LangChain >= 0.1, Document moved from langchain.schema to langchain_core.documents.
+# LangChain's core Document schema.
+# A Document bundles page_content (str) with an optional metadata dict,
+# propagating source information (URL, timestamps, etc.) throughout the pipeline.
 from langchain_core.documents import Document
 
-# The FAISS integration provided by LangChain. FAISS (Facebook AI Similarity
-# Search) is an efficient library for similarity search over dense vector
-# embeddings. We use the in-memory version here so no disk I/O is needed.
-from langchain_community.vectorstores import FAISS
+# PineconeVectorStore is LangChain's official integration with Pinecone.
+# It wraps the Pinecone client and exposes the familiar LangChain vector-store
+# interface (from_documents, add_documents, similarity_search) so the rest of
+# the RAG pipeline stays unchanged regardless of the underlying store.
+from langchain_pinecone import PineconeVectorStore
 
-# OpenAIEmbeddings converts text strings into high-dimensional numerical
-# vectors. Semantically similar texts will produce vectors that are close
-# to each other in this vector space, which is what powers the similarity search.
+# OpenAIEmbeddings converts text into high-dimensional float vectors.
+# Every document stored in Pinecone and every incoming query is first passed
+# through this model so they share the same vector space — a prerequisite for
+# meaningful similarity search.
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 
-# PromptTemplate lets us define a structured prompt with named placeholders
-# (like {context} and {question}) that get filled in at runtime.
-# Note: In LangChain >= 0.1, PromptTemplate moved from langchain.prompts to langchain_core.prompts.
+# PromptTemplate defines a reusable prompt structure with named placeholders
+# ({context}, {question}) that are filled in at query time.
 from langchain_core.prompts import PromptTemplate
+
+
+# The name of the Pinecone index that stores InsightStream's intelligence vectors.
+# This index must be pre-created in the Pinecone console with a dimension that
+# matches the embedding model output (1536 for text-embedding-ada-002).
+PINECONE_INDEX_NAME = "insightstream"
 
 
 class BasicRAGService:
     """
-    A basic Retrieval-Augmented Generation (RAG) service for InsightStream.
+    A cloud-backed Retrieval-Augmented Generation (RAG) service for InsightStream.
 
-    On initialization, this service:
-      - Loads API credentials from the environment.
-      - Instantiates the embedding model and the language model.
-      - Ingests a hardcoded corpus of competitive intelligence into a FAISS
-        vector store, making it immediately ready to answer queries.
+    On initialization this service:
+      - Loads all credentials (OpenAI + Pinecone) from environment variables.
+      - Instantiates the embedding model and the chat LLM.
+      - Connects to the existing 'insightstream' Pinecone index and seeds it
+        with a baseline corpus of competitive intelligence about TechNova.
+
+    After initialization the service exposes two public methods:
+      - store_documents(documents): persists new Document chunks to Pinecone.
+      - query(user_prompt):         retrieves relevant context and returns an
+                                    LLM-synthesized answer.
     """
 
     def __init__(self):
         """
-        Sets up the entire RAG pipeline at startup time so that query()
-        calls are fast (the embedding and indexing cost is paid once here,
-        not on every request).
+        Bootstraps the RAG pipeline:
+          1. Loads environment variables (.env → os.environ).
+          2. Initialises the embedding model and the LLM.
+          3. Connects to the Pinecone vector store.
+          4. Seeds the index with the hardcoded TechNova intelligence corpus.
         """
 
-        # load_dotenv() reads the .env file in the project root and injects
-        # its key-value pairs as environment variables. This keeps secrets
-        # (like OPENAI_API_KEY) out of source code entirely.
+        # load_dotenv() reads the project-root .env file and injects its
+        # key=value pairs into the process environment. This means neither
+        # OPENAI_API_KEY nor PINECONE_API_KEY ever appear in source code.
         load_dotenv()
 
         # ── Embedding Model ──────────────────────────────────────────────────
-        # OpenAIEmbeddings uses the "text-embedding-ada-002" model by default.
-        # It automatically reads OPENAI_API_KEY from the environment.
-        # Every piece of text we want to store — and every query we receive —
-        # will be passed through this model to get its vector representation.
+        # OpenAIEmbeddings uses "text-embedding-ada-002" by default, producing
+        # 1536-dimensional vectors. It reads OPENAI_API_KEY from the environment.
+        # Both storage (via store_documents) and retrieval (via query) use this
+        # same model instance to guarantee vectors live in the same space.
         self.embeddings = OpenAIEmbeddings()
 
         # ── Language Model ───────────────────────────────────────────────────
-        # ChatOpenAI wraps the OpenAI Chat Completions API. We use gpt-4o-mini
-        # for a cost-efficient, fast model that is still highly capable for
-        # synthesizing concise intelligence summaries.
-        # temperature=0 makes responses deterministic and factual — important
-        # for competitive intelligence where we want precision, not creativity.
+        # ChatOpenAI wraps the OpenAI Chat Completions API.
+        # gpt-4o-mini is chosen for its speed and cost efficiency while still
+        # producing high-quality analytical summaries.
+        # temperature=0 forces the model to be deterministic and factual —
+        # essential for competitive intelligence where consistency matters.
         self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-        # ── Knowledge Corpus ─────────────────────────────────────────────────
-        # This is the "database" of competitive intelligence for TechNova.
-        # In a production system, these strings would be ingested dynamically
-        # from news feeds, reports, or databases. For this foundational build,
-        # we hardcode three representative facts to validate the full pipeline.
-        raw_intelligence = [
+        # ── Connect to the Pinecone Vector Store ─────────────────────────────
+        # PineconeVectorStore.from_existing_index() establishes a connection to
+        # an index that already exists in our Pinecone project. Unlike
+        # from_documents(), this call does NOT embed or upload anything — it
+        # simply creates a client handle so we can run similarity_search() and
+        # add_documents() against the live index.
+        #
+        # The Pinecone client reads PINECONE_API_KEY (and optionally
+        # PINECONE_ENVIRONMENT) from the environment automatically.
+        self.vector_store = PineconeVectorStore.from_existing_index(
+            index_name=PINECONE_INDEX_NAME,
+            embedding=self.embeddings,
+        )
+
+        # ── Seed the Index with the Baseline Intelligence Corpus ─────────────
+        # These three facts about TechNova represent the initial, curated
+        # knowledge base of InsightStream. In production, this corpus would be
+        # replaced by dynamic ingestion (e.g., via the YouTube loader pipeline),
+        # but seeding the index here ensures the service can answer questions
+        # immediately after the first deploy — useful for smoke-testing the
+        # end-to-end pipeline without running a separate ingestion job.
+        seed_intelligence = [
             (
                 "TechNova launched its flagship AI-powered analytics platform, "
                 "NovaSight 2.0, in Q1 2025. The release introduced real-time "
@@ -101,64 +138,84 @@ class BasicRAGService:
             ),
         ]
 
-        # ── Convert Strings to LangChain Documents ───────────────────────────
-        # FAISS.from_documents() expects Document objects. We wrap each raw
-        # intelligence string in a Document, optionally attaching metadata
-        # (source label here) that can be used for provenance tracking later.
-        documents = [
+        seed_documents = [
             Document(page_content=text, metadata={"source": f"technova_brief_{i}"})
-            for i, text in enumerate(raw_intelligence)
+            for i, text in enumerate(seed_intelligence)
         ]
 
-        # ── Build the FAISS Vector Store ─────────────────────────────────────
-        # FAISS.from_documents() does two things in one call:
-        #   1. Calls self.embeddings.embed_documents() on every Document's
-        #      page_content, converting text → float vectors.
-        #   2. Inserts those vectors into an in-memory FAISS index.
-        # The resulting vector_store object exposes a similarity_search() method
-        # that we will use inside query() to retrieve relevant context.
-        self.vector_store = FAISS.from_documents(documents, self.embeddings)
+        # Persist the seed corpus to Pinecone via store_documents so the
+        # seeding and dynamic ingestion codepaths share a single implementation.
+        self.store_documents(seed_documents)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Public Methods
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def store_documents(self, documents: List[Document]) -> None:
+        """
+        Embeds and persists a list of Document chunks into the Pinecone index.
+
+        This method is the bridge between the ingestion pipeline
+        (ingestion_pipeline/youtube_loader.py → chunked Document objects) and
+        the vector store. Calling it is idempotent in terms of retrieval quality:
+        if you ingest the same content twice, Pinecone will store duplicate
+        vectors, so callers should deduplicate before ingesting if needed.
+
+        Args:
+            documents: A list of LangChain Document objects. Each Document's
+                       page_content is embedded and its metadata (source URL,
+                       timestamps, etc.) is stored alongside the vector so that
+                       provenance information survives into retrieval results.
+        """
+
+        # add_documents() does two things:
+        #   1. Calls self.embeddings.embed_documents() to convert each
+        #      Document's page_content into a float vector.
+        #   2. Upserts those vectors (with their metadata) into the live
+        #      Pinecone index identified by PINECONE_INDEX_NAME.
+        # Upserting is non-blocking in Pinecone — vectors become searchable
+        # within a few seconds of the call returning.
+        self.vector_store.add_documents(documents)
 
     def query(self, user_prompt: str) -> str:
         """
         Answers a competitive intelligence question using the RAG pattern.
 
         Steps:
-          1. Embed the user_prompt and find the top-k most similar Documents
-             in the FAISS index (similarity search).
-          2. Concatenate those Documents into a context string.
-          3. Inject the context + question into a structured prompt template.
-          4. Pass the filled-in prompt to the LLM and return its text reply.
+          1. Embed user_prompt and retrieve the top-2 most semantically similar
+             Documents from the Pinecone index (similarity search).
+          2. Concatenate those Documents into a structured context string.
+          3. Inject context + question into a PromptTemplate and send to the LLM.
+          4. Return the LLM's synthesized plain-text answer.
 
         Args:
             user_prompt: The natural-language question from the user,
-                         e.g. "What do we know about TechNova's leadership?"
+                         e.g. "What do we know about TechNova's new CTO?"
 
         Returns:
-            A string containing the LLM's synthesized answer, grounded in
-            the retrieved context from our FAISS index.
+            A string containing the LLM's answer, grounded strictly in the
+            retrieved context from the Pinecone index.
         """
 
-        # ── Step 1: Similarity Search ─────────────────────────────────────────
-        # similarity_search() embeds the user_prompt using the same embedding
-        # model used at ingestion time, then returns the k Documents whose
-        # stored vectors are closest (most semantically similar) to the query vector.
-        # k=2 means we retrieve the top 2 most relevant intelligence snippets.
-        retrieved_docs = self.vector_store.similarity_search(user_prompt, k=2)
+        # ── Step 1: Similarity Search Against Pinecone ───────────────────────
+        # similarity_search() embeds user_prompt with self.embeddings and issues
+        # an ANN (Approximate Nearest Neighbour) query against the Pinecone index.
+        # Pinecone returns the k vectors closest in cosine distance to the query
+        # vector, translated back into their original Document objects.
+        # k=2 keeps the context tight — surfacing only the top 2 most relevant
+        # snippets prevents the prompt from being diluted with loosely related content.
+        retrieved_docs = self.vector_store.similarity_search(user_prompt, k=10)
 
         # ── Step 2: Build the Context String ─────────────────────────────────
-        # We join the page content of each retrieved document with a separator.
-        # This combined text becomes the "context" the LLM is grounded in.
-        # Keeping retrieved chunks clearly separated helps the model parse
-        # multiple distinct facts without merging them incorrectly.
+        # Joining retrieved chunks with a visible separator (---) makes it easy
+        # for the LLM to distinguish between distinct intelligence snippets and
+        # prevents facts from bleeding into each other during synthesis.
         context = "\n\n---\n\n".join(doc.page_content for doc in retrieved_docs)
 
-        # ── Step 3: Construct the Prompt Template ────────────────────────────
-        # PromptTemplate defines the exact structure of the message we send to
-        # the LLM. The {context} and {question} placeholders are filled at
-        # runtime via .format(). Instructing the model explicitly to answer
-        # "only based on the context below" keeps it grounded and prevents
-        # it from drifting into speculation unsupported by our data.
+        # ── Step 3: Construct and Fill the Prompt Template ───────────────────
+        # The instruction "ONLY the context provided" is the critical RAG
+        # grounding directive — it tells the model to treat our retrieved data
+        # as the sole authoritative source, preventing hallucination.
         prompt_template = PromptTemplate(
             input_variables=["context", "question"],
             template=(
@@ -171,13 +228,12 @@ class BasicRAGService:
             ),
         )
 
-        # Fill in the template placeholders with our runtime values.
         filled_prompt = prompt_template.format(context=context, question=user_prompt)
 
         # ── Step 4: Call the LLM and Return the Response ─────────────────────
-        # self.llm.invoke() sends the filled prompt to the OpenAI Chat API
-        # and returns an AIMessage object. We access .content to get the
-        # plain string text of the model's reply.
+        # llm.invoke() sends the completed prompt to the OpenAI Chat API and
+        # returns an AIMessage. We unwrap .content to return a plain string
+        # to the caller (e.g., an API route handler).
         response = self.llm.invoke(filled_prompt)
 
         return response.content

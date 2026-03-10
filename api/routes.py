@@ -2,95 +2,156 @@
 api/routes.py
 
 This module defines all API routes for the InsightStream intelligence layer.
-It uses FastAPI's APIRouter to keep routing logic modular and separate from
-the application entry point (main.py). The router is registered in main.py,
-which means every route defined here will be accessible under the application.
+It uses FastAPI's APIRouter to keep routing logic modular and separate from the
+application entry point (main.py). Two categories of endpoints are registered:
+
+  1. /api/v1/intelligence/ingest  — Ingestion endpoint.
+     Accepts a YouTube video URL, fetches and chunks its transcript via the
+     ingestion pipeline, then persists those chunks into the Pinecone vector store.
+
+  2. /api/v1/intelligence/query   — Query endpoint.
+     Accepts a natural-language question, performs a Pinecone similarity search,
+     and returns an LLM-synthesized answer grounded in retrieved context.
 """
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 
-# Import the core RAG service. BasicRAGService encapsulates the full
-# Retrieval-Augmented Generation pipeline: embedding, vector search, and
-# LLM synthesis. We instantiate it here at module load time so that the
-# expensive __init__ work (embedding the corpus, building the FAISS index)
-# is done once when the server starts — not on every incoming request.
+# All request schemas live in api/schemas.py. Importing them here keeps this
+# module focused purely on routing logic — endpoint definitions, HTTP error
+# handling, and response shaping — with no schema duplication.
+from api.schemas import IngestRequest, QueryRequest
+
+# ingest_youtube_video handles transcript fetching and chunking.
+# It returns a list of LangChain Document objects ready for embedding and storage.
+from ingestion_pipeline.youtube_loader import ingest_youtube_video
+
+# BasicRAGService owns both halves of the RAG pipeline:
+#   - store_documents(): embeds Document chunks and upserts them into Pinecone.
+#   - query():          retrieves relevant context from Pinecone and calls the LLM.
+# Instantiating it once at module load time is intentional: __init__ loads
+# credentials, wires up the embedding model, the LLM, and the Pinecone connection,
+# and seeds the index with the baseline corpus. All of that work is paid once
+# at startup so individual requests stay fast.
 from services.rag_service import BasicRAGService
 
 # ── Router Initialization ─────────────────────────────────────────────────────
-# APIRouter is FastAPI's way of grouping related endpoints. By defining routes
-# on a router (rather than directly on the FastAPI app), we can keep this file
-# self-contained and include it in main.py with a single line.
+# APIRouter groups related endpoints into a self-contained module. main.py
+# attaches this router to the FastAPI application with a single include_router()
+# call, keeping the app entry point clean regardless of how many routes we add.
 router = APIRouter()
 
 # ── Service Instantiation ─────────────────────────────────────────────────────
-# A single, module-level instance of BasicRAGService is created here.
-# This pattern (sometimes called "poor-man's dependency injection") ensures
-# that the FAISS index and LLM client are shared across all requests rather
-# than being re-initialized on every hit, which would be prohibitively slow.
+# A single module-level instance is shared across all requests. This avoids
+# re-initialising the Pinecone connection, the embedding model, and the LLM
+# client on every HTTP hit, which would be prohibitively expensive.
 rag_service = BasicRAGService()
 
 
-# ── Request Schema ────────────────────────────────────────────────────────────
-class QueryRequest(BaseModel):
+# ── Ingestion Endpoint ────────────────────────────────────────────────────────
+
+@router.post("/api/v1/intelligence/ingest")
+async def ingest_video(request: IngestRequest):
     """
-    Pydantic model for the POST /query request body.
+    POST /api/v1/intelligence/ingest
 
-    FastAPI automatically parses and validates the incoming JSON body against
-    this schema. If the body is missing the 'query' field or if 'query' is
-    not a string, FastAPI returns a 422 Unprocessable Entity before our
-    handler function even runs.
+    Ingests a YouTube video's transcript into the Pinecone knowledge base.
 
-    Attributes:
-        query: The natural-language question submitted by the user,
-               e.g. "What is TechNova's latest funding round?"
+    Flow:
+      1. FastAPI deserialises and validates the request body into an IngestRequest.
+      2. ingest_youtube_video() fetches the transcript from YouTube and splits it
+         into overlapping Document chunks using RecursiveCharacterTextSplitter.
+         Each chunk is a LangChain Document with the source URL in its metadata.
+      3. rag_service.store_documents() embeds each chunk with OpenAIEmbeddings
+         and upserts the resulting vectors into the live Pinecone index.
+         After this call the new content is immediately available for similarity search.
+      4. We return a success message that reports how many chunks were stored,
+         which gives the caller a simple signal of how much content was indexed.
+
+    Args:
+        request: A validated IngestRequest instance containing the video URL.
+
+    Returns:
+        A JSON object:
+        {
+          "message": "Successfully ingested video.",
+          "chunks_stored": <int>
+        }
+
+    Raises:
+        HTTPException 500: Raised if the YouTube transcript cannot be fetched
+                           (private video, disabled captions, invalid URL) or if
+                           the Pinecone upsert fails (network error, quota exceeded).
     """
+    try:
+        # Phase 1 — Load and chunk the transcript.
+        # ingest_youtube_video() returns a list of Document objects. The number
+        # of documents depends on the video length and the splitter's chunk_size
+        # setting (currently 1000 characters with 100-character overlap).
+        documents = ingest_youtube_video(request.video_url)
 
-    query: str
+        # Phase 2 — Embed and persist to Pinecone.
+        # store_documents() delegates to PineconeVectorStore.add_documents(),
+        # which handles both embedding and upserting in a single call. Vectors
+        # become searchable in Pinecone within a few seconds of this returning.
+        rag_service.store_documents(documents)
+
+    except Exception as e:
+        # Surface any upstream failure (bad URL, no transcript, Pinecone error)
+        # as an HTTP 500 so the caller receives a structured JSON error body
+        # rather than an unhandled server crash or an opaque timeout.
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Report back the exact number of chunks stored. This is useful for the
+    # caller to verify that the ingestion produced a reasonable amount of content
+    # (e.g., a 30-minute video should produce many more chunks than a 2-minute one).
+    return {
+        "message": "Successfully ingested video.",
+        "chunks_stored": len(documents),
+    }
 
 
-# ── Intelligence Query Endpoint ───────────────────────────────────────────────
+# ── Query Endpoint ────────────────────────────────────────────────────────────
+
 @router.post("/api/v1/intelligence/query")
 async def intelligence_query(request: QueryRequest):
     """
     POST /api/v1/intelligence/query
 
-    Receives a natural-language query and returns a grounded answer synthesized
-    by the RAG pipeline.
+    Answers a natural-language competitive intelligence question by searching
+    the Pinecone knowledge base and synthesising a grounded LLM response.
 
     Flow:
-      1. FastAPI deserializes the request body into a QueryRequest instance,
-         validating that 'query' is present and is a string.
-      2. We pass request.query to rag_service.query(), which performs:
-           a. A FAISS similarity search to retrieve the most relevant context.
-           b. Prompt construction using that context + the user's question.
-           c. An LLM call that synthesizes a final, grounded answer.
-      3. The answer string is returned as a JSON response: {"answer": "..."}.
+      1. FastAPI deserialises and validates the request body into a QueryRequest.
+      2. rag_service.query() performs a cosine-similarity search against the
+         Pinecone index to retrieve the top-2 most relevant Document chunks,
+         constructs a grounded prompt (context + question), and calls the LLM.
+      3. The LLM's plain-text response is wrapped in a JSON envelope and returned.
 
     Args:
-        request: A validated QueryRequest instance injected by FastAPI.
+        request: A validated QueryRequest instance containing the user's question.
 
     Returns:
-        A JSON object with a single key "answer" containing the LLM's response.
+        A JSON object:
+        {
+          "answer": "<LLM-synthesised response string>"
+        }
 
     Raises:
-        HTTPException 500: If the RAG pipeline raises an unexpected error
-                           (e.g., OpenAI API is unreachable), we catch it and
-                           return a structured error to the client rather than
-                           leaking an internal traceback.
+        HTTPException 500: Raised if the Pinecone similarity search or the
+                           OpenAI Chat API call fails for any reason.
     """
     try:
-        # Delegate to the RAG service. This is the single point where all
-        # intelligence-retrieval logic lives; the route stays thin and clean.
+        # Delegate entirely to the RAG service. The route stays thin — it is
+        # responsible only for HTTP concerns (parsing, error shaping, response
+        # formatting). All intelligence logic lives in rag_service.query().
         answer = rag_service.query(request.query)
+
     except Exception as e:
-        # Surface any upstream errors (network issues, API quota exceeded, etc.)
-        # as a 500 so the client receives a meaningful JSON error body instead
-        # of an unhandled server crash.
+        # Convert any RAG-layer or network exception into a structured 500 so
+        # the client always receives JSON, never an unhandled Python traceback.
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Return a simple JSON envelope. Wrapping the answer in a keyed dict
-    # (rather than returning a bare string) keeps the API response consistent
-    # and easy to extend with additional fields (e.g., "sources", "confidence")
-    # in future versions without breaking existing clients.
+    # Wrap the answer in a keyed dict. A bare string response is harder to extend;
+    # a dict lets us add "sources", "confidence", or "retrieved_chunks" keys in
+    # future versions without breaking clients that already parse {"answer": "..."}.
     return {"answer": answer}
