@@ -70,7 +70,7 @@ def run_evaluation():
     
     # Check if the FastAPI server is actually running before we start
     try:
-        requests.get("http://localhost:8000/docs", timeout=5)
+        requests.get("http://localhost:8000/docs", timeout=30)
     except requests.exceptions.ConnectionError:
         print("❌ Error: Cannot connect to FastAPI server.")
         print("Please start the server using 'uvicorn main:app --reload' in another terminal.")

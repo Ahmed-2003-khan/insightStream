@@ -188,60 +188,26 @@ class BasicRAGService:
 
     def query(self, user_prompt: str) -> str:
         """
-        Answers a competitive intelligence question using the RAG pattern.
-
-        Steps:
-          1. Embed user_prompt and retrieve the top-10 most semantically similar
-             Documents from the Pinecone index (similarity search).
-          2. Concatenate those Documents into a structured context string.
-          3. Inject context + question into a PromptTemplate and send to the LLM.
-          4. Return the LLM's synthesized plain-text answer.
-
-        Args:
-            user_prompt: The natural-language question from the user,
-                         e.g. "What do we know about TechNova's new CTO?"
-
-        Returns:
-            A string containing the LLM's answer, grounded strictly in the
-            retrieved context from the Pinecone index.
+        Executes a RAG query by submitting the user's prompt to the compiled
+        LangGraph reasoning engine (intelligence_graph).
+        
+        The graph will automatically handle:
+          1. Searching Pinecone.
+          2. Fallback fetching of external data (if Pinecone is lacking).
+          3. ML signal classification of the context.
+          4. Final LLM synthesis of the intelligence report.
         """
+        from ai_orchestration.graph import intelligence_graph
 
-        # ── Step 1: Similarity Search Against Pinecone ───────────────────────
-        # similarity_search() embeds user_prompt with self.embeddings and issues
-        # an ANN (Approximate Nearest Neighbour) query against the Pinecone index.
-        # Pinecone returns the k vectors closest in cosine distance to the query
-        # vector, translated back into their original Document objects.
-        # k=10 surfaces the top 10 most relevant snippets for comprehensive answers.
-        retrieved_docs = self.vector_store.similarity_search(user_prompt, k=10)
-
-        # ── Step 2: Build the Context String ─────────────────────────────────
-        # Joining retrieved chunks with a visible separator (---) makes it easy
-        # for the LLM to distinguish between distinct intelligence snippets and
-        # prevents facts from bleeding into each other during synthesis.
-        context = "\n\n---\n\n".join(doc.page_content for doc in retrieved_docs)
-
-        # ── Step 3: Construct and Fill the Prompt Template ───────────────────
-        # The instruction "ONLY the context provided" is the critical RAG
-        # grounding directive — it tells the model to treat our retrieved data
-        # as the sole authoritative source, preventing hallucination.
-        prompt_template = PromptTemplate(
-            input_variables=["context", "question"],
-            template=(
-                "You are a precise competitive intelligence analyst for InsightStream.\n"
-                "Answer the question below using ONLY the context provided.\n"
-                "If the context does not contain enough information, say so clearly.\n\n"
-                "Context:\n{context}\n\n"
-                "Question: {question}\n\n"
-                "Answer:"
-            ),
-        )
-
-        filled_prompt = prompt_template.format(context=context, question=user_prompt)
-
-        # ── Step 4: Call the LLM and Return the Response ─────────────────────
-        # llm.invoke() sends the completed prompt to the OpenAI Chat API and
-        # returns an AIMessage. We unwrap .content to return a plain string
-        # to the caller (e.g., an API route handler).
-        response = self.llm.invoke(filled_prompt)
-
-        return response.content
+        # We construct the initial AgentState to feed into the graph
+        result = intelligence_graph.invoke({
+            "query": user_prompt,
+            "search_results": [],
+            "signal_label": "",
+            "signal_confidence": 0.0,
+            "final_report": "",
+            "retry_count": 0
+        })
+        
+        # The node writer_agent populates "final_report" at the end of the graph execution
+        return result["final_report"]
