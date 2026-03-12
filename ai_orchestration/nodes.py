@@ -15,6 +15,43 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
+def query_planner_agent(state: AgentState) -> AgentState:
+    """
+    Dynamically generates a specific intelligence query based on
+    company name and today's date. Replaces static hardcoded queries.
+    """
+    from langchain_openai import ChatOpenAI
+    from datetime import datetime
+
+    today = datetime.now().strftime("%B %d, %Y")
+    company = state.get("company_name", "")
+
+    # If no company name provided — user is querying directly via API
+    # Skip planning and use existing query as is
+    if not company:
+        state["planned_query"] = state["query"]
+        return state
+
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+
+    prompt = f"""You are a competitive intelligence analyst.
+Today's date is {today}.
+Generate ONE specific search query for gathering fresh intelligence about {company}.
+The query must:
+- Be specific to what is newsworthy about {company} right now
+- Focus on one of: product launches, earnings, or geopolitical/regulatory news
+- Include the current year
+- Be between 8 and 15 words
+Return only the query string. No explanation. No punctuation at the end."""
+
+    response = llm.invoke(prompt)
+    planned_query = response.content.strip()
+
+    state["planned_query"] = planned_query
+    state["query"] = planned_query
+    return state
+
+
 def search_agent(state: AgentState) -> AgentState:
     """
     Node 1: Executes semantic search against the Pinecone knowledge base.

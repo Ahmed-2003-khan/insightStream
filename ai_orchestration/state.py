@@ -11,6 +11,8 @@ class AgentState(TypedDict):
     The shared state dictionary passed between all nodes in the graph.
     Every node reads from and/or writes to this state structure.
     """
+    company_name: str
+    planned_query: str
     query: str
     search_results: list
     signal_label: str

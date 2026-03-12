@@ -67,8 +67,11 @@ def ingest_news(query: str) -> List[Document]:
     chunked_documents = text_splitter.split_documents(raw_documents)
 
     # Tag every chunk with standard metadata for downstream filtering
+    import hashlib
     for chunk in chunked_documents:
         chunk.metadata["source"] = "news"
         chunk.metadata["topic"] = query
+        content_hash = hashlib.md5(chunk.page_content.encode()).hexdigest()
+        chunk.metadata["content_hash"] = content_hash
 
     return chunked_documents

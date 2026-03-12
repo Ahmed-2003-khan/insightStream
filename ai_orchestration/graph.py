@@ -17,7 +17,7 @@ it to "proceed" to the analyst with whatever information it has.
 
 from langgraph.graph import StateGraph, END
 from ai_orchestration.state import AgentState
-from ai_orchestration.nodes import search_agent, fallback_search_agent, analyst_agent, writer_agent
+from ai_orchestration.nodes import query_planner_agent, search_agent, fallback_search_agent, analyst_agent, writer_agent
 
 def should_fallback(state: AgentState) -> str:
     """
@@ -34,14 +34,16 @@ def should_fallback(state: AgentState) -> str:
 # 1. Initialize the graph with our shared state schema
 graph_builder = StateGraph(AgentState)
 
-# 2. Add all four execution nodes
+# 2. Add all execution nodes
+graph_builder.add_node("query_planner", query_planner_agent)
 graph_builder.add_node("search", search_agent)
 graph_builder.add_node("fallback_search", fallback_search_agent)
 graph_builder.add_node("analyst", analyst_agent)
 graph_builder.add_node("writer", writer_agent)
 
 # 3. Define the entry point
-graph_builder.set_entry_point("search")
+graph_builder.set_entry_point("query_planner")
+graph_builder.add_edge("query_planner", "search")
 
 # 4. Add Conditional Routing from the initial search
 graph_builder.add_conditional_edges(

@@ -107,7 +107,10 @@ def ingest_youtube_video(video_url: str) -> List[Document]:
     # we standardise it here to the string "youtube" so downstream consumers
     # (e.g., citation logic, source-specific filtering) can rely on a consistent
     # value regardless of which loader was used.
+    import hashlib
     for chunk in chunked_documents:
         chunk.metadata["source"] = "youtube"
+        content_hash = hashlib.md5(chunk.page_content.encode()).hexdigest()
+        chunk.metadata["content_hash"] = content_hash
 
     return chunked_documents

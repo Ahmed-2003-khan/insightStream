@@ -34,39 +34,50 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 TRACKED_COMPANIES = [
-    {"name": "Microsoft", "ticker": "MSFT", "query": "Microsoft AI strategy and product launches"},
-    {"name": "Apple",     "ticker": "AAPL", "query": "Apple revenue earnings and product news"},
-    {"name": "Google",    "ticker": "GOOGL", "query": "Google Alphabet AI competition and launches"},
+    {"name": "Microsoft", "ticker": "MSFT"},
+    {"name": "Apple",     "ticker": "AAPL"},
+    {"name": "Google",    "ticker": "GOOGL"},
 ]
+
+from datetime import datetime
+from services.cache_service import clear_cache
 
 async def nightly_pipeline():
     logger.info("Nightly pipeline starting...")
+
+    # Fix 2A: Clear cache before pipeline so fresh data is used
+    cleared = clear_cache()
+    logger.info(f"Cache cleared: {cleared} keys removed")
+
     rag = BasicRAGService()
+    is_monday = datetime.now().weekday() == 0
 
     for company in TRACKED_COMPANIES:
         try:
-            # Step 1: Ingest fresh news
-            news_chunks = ingest_news(company["query"])
-            rag.store_documents(news_chunks)
-            logger.info(f"News ingested for {company['name']}: {len(news_chunks)} chunks")
+            # Fix 2B: SEC only on Mondays
+            if is_monday:
+                sec_chunks = ingest_sec_filing(company["ticker"])
+                rag.store_documents(sec_chunks)
+                logger.info(f"SEC filing ingested for {company['name']}: {len(sec_chunks)} chunks")
+            else:
+                logger.info(f"SEC skipped for {company['name']} — not Monday")
 
-            # Step 2: Ingest SEC filing
-            sec_chunks = ingest_sec_filing(company["ticker"])
-            rag.store_documents(sec_chunks)
-            logger.info(f"SEC filing ingested for {company['name']}: {len(sec_chunks)} chunks")
-
-            # Step 3: Generate intelligence report
-            result = rag.query(company["query"])
-            
-            logger.info(f"Report Output Keys: {result.keys()}")
-            logger.info(f"Cache Hit?: {result.get('cache_hit')}")
-
-            logger.info(f"Nightly report generated for {company['name']}")
+            # Query planner generates dynamic query via LangGraph
+            result = intelligence_graph.invoke({
+                "company_name": company["name"],
+                "planned_query": "",
+                "query": "",
+                "search_results": [],
+                "signal_label": "",
+                "signal_confidence": 0.0,
+                "final_report": "",
+                "retry_count": 0
+            })
+            logger.info(f"Planned query for {company['name']}: {result['planned_query']}")
+            logger.info(f"Report generated for {company['name']}: {result['signal_label']}")
 
         except Exception as e:
-            logger.error(f"Nightly pipeline failed for {company['name']}: {repr(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Pipeline failed for {company['name']}: {e}")
             continue
 
     logger.info("Nightly pipeline complete.")

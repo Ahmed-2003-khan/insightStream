@@ -163,28 +163,19 @@ class BasicRAGService:
     def store_documents(self, documents: List[Document]) -> None:
         """
         Embeds and persists a list of Document chunks into the Pinecone index.
-
-        This method is the bridge between the ingestion pipeline
-        (ingestion_pipeline/youtube_loader.py → chunked Document objects) and
-        the vector store. Calling it is idempotent in terms of retrieval quality:
-        if you ingest the same content twice, Pinecone will store duplicate
-        vectors, so callers should deduplicate before ingesting if needed.
-
-        Args:
-            documents: A list of LangChain Document objects. Each Document's
-                       page_content is embedded and its metadata (source URL,
-                       timestamps, etc.) is stored alongside the vector so that
-                       provenance information survives into retrieval results.
         """
+        from datetime import datetime
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        today = datetime.now().strftime("%Y-%m-%d")
 
-        # add_documents() does two things:
-        #   1. Calls self.embeddings.embed_documents() to convert each
-        #      Document's page_content into a float vector.
-        #   2. Upserts those vectors (with their metadata) into the live
-        #      Pinecone index identified by pinecone_index_name.
-        # Upserting is non-blocking in Pinecone — vectors become searchable
-        # within a few seconds of the call returning.
+        # Tag every chunk with ingestion date
+        for doc in documents:
+            doc.metadata["ingested_date"] = today
+
         self.vector_store.add_documents(documents)
+        logger.info(f"Stored {len(documents)} chunks with date {today}")
 
     def query(self, user_prompt: str) -> str:
         """
@@ -212,6 +203,8 @@ class BasicRAGService:
 
         # We construct the initial AgentState to feed into the graph
         result = intelligence_graph.invoke({
+            "company_name": "",
+            "planned_query": "",
             "query": user_prompt,
             "search_results": [],
             "signal_label": "",

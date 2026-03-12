@@ -82,10 +82,13 @@ def ingest_sec_filing(ticker: str) -> List[Document]:
     
     # Ensure every chunk carries the necessary metadata (source is already in parent)
     # We add metadata here explicitly to be consistent with our news/youtube loaders.
+    import hashlib
     for chunk in chunked_documents:
         chunk.metadata["source"] = "sec"
         chunk.metadata["filing_type"] = "10-K"
         chunk.metadata["ticker"] = ticker
+        content_hash = hashlib.md5(chunk.page_content.encode()).hexdigest()
+        chunk.metadata["content_hash"] = content_hash
 
     # 5. Cleanup the downloaded files
     if os.path.exists(download_dir):
