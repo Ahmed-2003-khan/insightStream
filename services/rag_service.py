@@ -45,21 +45,16 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 
 
-# The name of the Pinecone index that stores InsightStream's intelligence vectors.
-# This index must be pre-created in the Pinecone console with a dimension that
-# matches the embedding model output (1536 for text-embedding-ada-002).
-PINECONE_INDEX_NAME = "insightstream"
-
-
 class BasicRAGService:
     """
     A cloud-backed Retrieval-Augmented Generation (RAG) service for InsightStream.
 
     On initialization this service:
       - Loads all credentials (OpenAI + Pinecone) from environment variables.
+      - Reads the Pinecone index name from the PINECONE_INDEX_NAME env var.
       - Instantiates the embedding model and the chat LLM.
-      - Connects to the existing 'insightstream' Pinecone index and seeds it
-        with a baseline corpus of competitive intelligence about TechNova.
+      - Connects to the existing Pinecone index and seeds it with a baseline
+        corpus of competitive intelligence about TechNova.
 
     After initialization the service exposes two public methods:
       - store_documents(documents): persists new Document chunks to Pinecone.
@@ -71,15 +66,29 @@ class BasicRAGService:
         """
         Bootstraps the RAG pipeline:
           1. Loads environment variables (.env → os.environ).
-          2. Initialises the embedding model and the LLM.
-          3. Connects to the Pinecone vector store.
-          4. Seeds the index with the hardcoded TechNova intelligence corpus.
+          2. Reads PINECONE_INDEX_NAME from the environment.
+          3. Initialises the embedding model and the LLM.
+          4. Connects to the Pinecone vector store.
+          5. Seeds the index with the hardcoded TechNova intelligence corpus.
         """
 
         # load_dotenv() reads the project-root .env file and injects its
         # key=value pairs into the process environment. This means neither
         # OPENAI_API_KEY nor PINECONE_API_KEY ever appear in source code.
         load_dotenv()
+
+        # ── Pinecone Index Name ───────────────────────────────────────────────
+        # Reading the index name from an environment variable (set in .env as
+        # PINECONE_INDEX_NAME=insightstream) means we can point the service at a
+        # different index per environment (dev, staging, prod) without touching
+        # application code. If the variable is absent, we raise immediately with
+        # a clear error rather than failing later with a cryptic Pinecone 404.
+        pinecone_index_name = os.getenv("PINECONE_INDEX_NAME")
+        if not pinecone_index_name:
+            raise ValueError(
+                "PINECONE_INDEX_NAME environment variable is not set. "
+                "Add PINECONE_INDEX_NAME=insightstream to your .env file."
+            )
 
         # ── Embedding Model ──────────────────────────────────────────────────
         # OpenAIEmbeddings uses "text-embedding-ada-002" by default, producing
@@ -106,7 +115,7 @@ class BasicRAGService:
         # The Pinecone client reads PINECONE_API_KEY (and optionally
         # PINECONE_ENVIRONMENT) from the environment automatically.
         self.vector_store = PineconeVectorStore.from_existing_index(
-            index_name=PINECONE_INDEX_NAME,
+            index_name=pinecone_index_name,
             embedding=self.embeddings,
         )
 
@@ -172,7 +181,7 @@ class BasicRAGService:
         #   1. Calls self.embeddings.embed_documents() to convert each
         #      Document's page_content into a float vector.
         #   2. Upserts those vectors (with their metadata) into the live
-        #      Pinecone index identified by PINECONE_INDEX_NAME.
+        #      Pinecone index identified by pinecone_index_name.
         # Upserting is non-blocking in Pinecone — vectors become searchable
         # within a few seconds of the call returning.
         self.vector_store.add_documents(documents)
@@ -182,7 +191,7 @@ class BasicRAGService:
         Answers a competitive intelligence question using the RAG pattern.
 
         Steps:
-          1. Embed user_prompt and retrieve the top-2 most semantically similar
+          1. Embed user_prompt and retrieve the top-10 most semantically similar
              Documents from the Pinecone index (similarity search).
           2. Concatenate those Documents into a structured context string.
           3. Inject context + question into a PromptTemplate and send to the LLM.
@@ -202,8 +211,7 @@ class BasicRAGService:
         # an ANN (Approximate Nearest Neighbour) query against the Pinecone index.
         # Pinecone returns the k vectors closest in cosine distance to the query
         # vector, translated back into their original Document objects.
-        # k=2 keeps the context tight — surfacing only the top 2 most relevant
-        # snippets prevents the prompt from being diluted with loosely related content.
+        # k=10 surfaces the top 10 most relevant snippets for comprehensive answers.
         retrieved_docs = self.vector_store.similarity_search(user_prompt, k=10)
 
         # ── Step 2: Build the Context String ─────────────────────────────────

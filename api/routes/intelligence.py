@@ -1,5 +1,5 @@
 """
-api/routes.py
+api/routes/intelligence.py
 
 This module defines all API routes for the InsightStream intelligence layer.
 It uses FastAPI's APIRouter to keep routing logic modular and separate from the
@@ -12,18 +12,29 @@ application entry point (main.py). Two categories of endpoints are registered:
   2. /api/v1/intelligence/query   — Query endpoint.
      Accepts a natural-language question, performs a Pinecone similarity search,
      and returns an LLM-synthesized answer grounded in retrieved context.
+
+Stage 3 note: Additional route modules (e.g., reports.py, sources.py) can be
+added alongside this file and registered in main.py with separate include_router()
+calls, keeping each concern fully isolated.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from core_backend.security import get_api_key
 
 # All request schemas live in api/schemas.py. Importing them here keeps this
 # module focused purely on routing logic — endpoint definitions, HTTP error
 # handling, and response shaping — with no schema duplication.
-from api.schemas import IngestRequest, QueryRequest
+from api.schemas import IngestRequest, QueryRequest, NewsIngestRequest, SECIngestRequest
 
 # ingest_youtube_video handles transcript fetching and chunking.
 # It returns a list of LangChain Document objects ready for embedding and storage.
 from ingestion_pipeline.youtube_loader import ingest_youtube_video
+
+# ingest_news fetches top Tavily articles and chunks them.
+from ingestion_pipeline.news_loader import ingest_news
+
+# ingest_sec_filing downloads and chunks latest SEC 10-K filings.
+from ingestion_pipeline.sec_loader import ingest_sec_filing
 
 # BasicRAGService owns both halves of the RAG pipeline:
 #   - store_documents(): embeds Document chunks and upserts them into Pinecone.
@@ -50,7 +61,7 @@ rag_service = BasicRAGService()
 # ── Ingestion Endpoint ────────────────────────────────────────────────────────
 
 @router.post("/api/v1/intelligence/ingest")
-async def ingest_video(request: IngestRequest):
+async def ingest_video(request: IngestRequest, api_key: str = Depends(get_api_key)):
     """
     POST /api/v1/intelligence/ingest
 
@@ -59,8 +70,9 @@ async def ingest_video(request: IngestRequest):
     Flow:
       1. FastAPI deserialises and validates the request body into an IngestRequest.
       2. ingest_youtube_video() fetches the transcript from YouTube and splits it
-         into overlapping Document chunks using RecursiveCharacterTextSplitter.
-         Each chunk is a LangChain Document with the source URL in its metadata.
+         into overlapping Document chunks using RecursiveCharacterTextSplitter
+         (token-aware, 512 token chunks with 50 token overlap).
+         Each chunk has metadata["source"] = "youtube".
       3. rag_service.store_documents() embeds each chunk with OpenAIEmbeddings
          and upserts the resulting vectors into the live Pinecone index.
          After this call the new content is immediately available for similarity search.
@@ -86,7 +98,7 @@ async def ingest_video(request: IngestRequest):
         # Phase 1 — Load and chunk the transcript.
         # ingest_youtube_video() returns a list of Document objects. The number
         # of documents depends on the video length and the splitter's chunk_size
-        # setting (currently 1000 characters with 100-character overlap).
+        # setting (currently 512 tokens with 50-token overlap).
         documents = ingest_youtube_video(request.video_url)
 
         # Phase 2 — Embed and persist to Pinecone.
@@ -110,10 +122,58 @@ async def ingest_video(request: IngestRequest):
     }
 
 
+@router.post("/api/v1/intelligence/ingest/news")
+async def ingest_news_topic(request: NewsIngestRequest, api_key: str = Depends(get_api_key)):
+    """
+    POST /api/v1/intelligence/ingest/news
+
+    Ingests recent competitive intelligence news on a specific topic.
+    """
+    try:
+        # Phase 1 — Load and chunk the news articles using Tavily.
+        # ingest_news() fetches top 5 results and chunks them (512 tokens).
+        documents = ingest_news(request.topic)
+
+        # Phase 2 — Embed and persist to Pinecone.
+        rag_service.store_documents(documents)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "message": f"Successfully ingested news for topic: {request.topic}",
+        "chunks_stored": len(documents),
+    }
+
+
+@router.post("/api/v1/intelligence/ingest/sec")
+async def ingest_sec_ticker(request: SECIngestRequest, api_key: str = Depends(get_api_key)):
+    """
+    POST /api/v1/intelligence/ingest/sec
+
+    Ingests the latest 10-K SEC filing for a specific stock ticker.
+    """
+    try:
+        # Phase 1 — Download and chunk the latest 10-K using sec-edgar-downloader.
+        documents = ingest_sec_filing(request.ticker)
+
+        # Phase 2 — Embed and persist to Pinecone.
+        rag_service.store_documents(documents)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "message": f"Successfully ingested 10-K for ticker: {request.ticker}",
+        "chunks_stored": len(documents),
+        "ticker": request.ticker
+    }
+
+
 # ── Query Endpoint ────────────────────────────────────────────────────────────
 
 @router.post("/api/v1/intelligence/query")
-async def intelligence_query(request: QueryRequest):
+async def intelligence_query(request: QueryRequest, api_key: str = Depends(get_api_key)):
     """
     POST /api/v1/intelligence/query
 
@@ -123,7 +183,7 @@ async def intelligence_query(request: QueryRequest):
     Flow:
       1. FastAPI deserialises and validates the request body into a QueryRequest.
       2. rag_service.query() performs a cosine-similarity search against the
-         Pinecone index to retrieve the top-2 most relevant Document chunks,
+         Pinecone index to retrieve the top-10 most relevant Document chunks,
          constructs a grounded prompt (context + question), and calls the LLM.
       3. The LLM's plain-text response is wrapped in a JSON envelope and returned.
 

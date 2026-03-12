@@ -32,3 +32,26 @@ class QueryRequest(BaseModel):
     """
 
     query: str
+
+
+class NewsIngestRequest(BaseModel):
+    """
+    Request body for POST /api/v1/intelligence/ingest/news.
+
+    Attributes:
+        topic: The search topic to retrieve recent news for,
+               e.g. "OpenAI product announcements"
+    """
+
+    topic: str
+
+
+class SECIngestRequest(BaseModel):
+    """
+    Request body for POST /api/v1/intelligence/ingest/sec.
+
+    Attributes:
+        ticker: The stock ticker symbol, e.g. "MSFT"
+    """
+
+    ticker: str
