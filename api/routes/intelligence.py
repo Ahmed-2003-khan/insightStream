@@ -24,7 +24,10 @@ from core_backend.security import get_api_key
 # All request schemas live in api/schemas.py. Importing them here keeps this
 # module focused purely on routing logic — endpoint definitions, HTTP error
 # handling, and response shaping — with no schema duplication.
-from api.schemas import IngestRequest, QueryRequest, NewsIngestRequest, SECIngestRequest
+from api.schemas import IngestRequest, QueryRequest, NewsIngestRequest, SECIngestRequest, ReportsResponse
+from core_backend.database import SessionLocal, get_db
+from core_backend.models import Report
+from sqlalchemy.orm import Session
 
 # ingest_youtube_video handles transcript fetching and chunking.
 # It returns a list of LangChain Document objects ready for embedding and storage.
@@ -215,3 +218,16 @@ async def intelligence_query(request: QueryRequest, api_key: str = Depends(get_a
     # a dict lets us add "sources", "confidence", or "retrieved_chunks" keys in
     # future versions without breaking clients that already parse {"answer": "..."}.
     return {"answer": answer}
+
+@router.get("/api/v1/intelligence/reports")
+def get_reports(
+    limit: int = 10,
+    api_key: str = Depends(get_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    GET /api/v1/intelligence/reports
+    Returns a list of previously generated intelligence reports from PostgreSQL.
+    """
+    reports = db.query(Report).order_by(Report.created_at.desc()).limit(limit).all()
+    return {"total": len(reports), "reports": reports}

@@ -208,6 +208,28 @@ class BasicRAGService:
             "final_report": "",
             "retry_count": 0
         })
+
+        # Save the generated report to PostgreSQL before returning
+        from core_backend.database import SessionLocal
+        from core_backend.models import Report
+        
+        db = SessionLocal()
+        try:
+            sources = ", ".join([r.get("source", "unknown") for r in result.get("search_results", [])])
+            report_record = Report(
+                query        = user_prompt,
+                signal_label = result.get("signal_label", "UNKNOWN"),
+                confidence   = result.get("signal_confidence", 0.0),
+                report_text  = result.get("final_report", ""),
+                sources      = sources
+            )
+            db.add(report_record)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"Database save error: {e}")
+        finally:
+            db.close()
         
         # The node writer_agent populates "final_report" at the end of the graph execution
         return result["final_report"]

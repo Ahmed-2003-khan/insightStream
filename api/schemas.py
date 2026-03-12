@@ -8,7 +8,21 @@ and makes schemas easy to reuse across multiple route modules as the API grows.
 """
 
 from pydantic import BaseModel
+from typing import List, Optional
+from datetime import datetime
 
+class ReportItem(BaseModel):
+    id:           int
+    query:        str
+    signal_label: str
+    confidence:   float
+    report_text:  str
+    sources:      Optional[str]
+    created_at:   datetime
+
+class ReportsResponse(BaseModel):
+    total:   int
+    reports: List[ReportItem]
 
 class IngestRequest(BaseModel):
     """
