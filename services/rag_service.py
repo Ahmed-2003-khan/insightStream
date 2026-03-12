@@ -199,6 +199,17 @@ class BasicRAGService:
         """
         from ai_orchestration.graph import intelligence_graph
 
+        # Check cache first
+        from services.cache_service import get_cached, set_cached
+        cached = get_cached(user_prompt)
+        if cached:
+            return {
+                "report": cached, 
+                "cache_hit": True, 
+                "signal_label": "CACHED", 
+                "signal_confidence": 0.0
+            }
+
         # We construct the initial AgentState to feed into the graph
         result = intelligence_graph.invoke({
             "query": user_prompt,
@@ -225,11 +236,20 @@ class BasicRAGService:
             )
             db.add(report_record)
             db.commit()
+
+            # Save to cache for next time
+            set_cached(user_prompt, result["final_report"])
+
         except Exception as e:
             db.rollback()
-            print(f"Database save error: {e}")
+            print(f"Database/Cache save error: {e}")
         finally:
             db.close()
         
         # The node writer_agent populates "final_report" at the end of the graph execution
-        return result["final_report"]
+        return {
+            "report": result["final_report"], 
+            "cache_hit": False, 
+            "signal_label": result["signal_label"], 
+            "signal_confidence": result["signal_confidence"]
+        }

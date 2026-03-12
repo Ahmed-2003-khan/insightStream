@@ -13,11 +13,63 @@ and easy to extend as the project grows.
 """
 
 from fastapi import FastAPI
+from api.routes.intelligence import router
 
-# Import the router defined in api/routes.py. The router carries all of the
-# endpoint definitions for the intelligence layer. By importing and including
-# it here, we attach those routes to the top-level FastAPI application.
-from api.routes import router
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from ingestion_pipeline.news_loader import ingest_news
+from ingestion_pipeline.sec_loader import ingest_sec_filing
+from services.rag_service import BasicRAGService
+from core_backend.database import SessionLocal
+from core_backend.models import Report
+import logging
+import sys
+
+logging.basicConfig(
+    stream=sys.stdout, 
+    level=logging.INFO, 
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+scheduler = AsyncIOScheduler()
+
+TRACKED_COMPANIES = [
+    {"name": "Microsoft", "ticker": "MSFT", "query": "Microsoft AI strategy and product launches"},
+    {"name": "Apple",     "ticker": "AAPL", "query": "Apple revenue earnings and product news"},
+    {"name": "Google",    "ticker": "GOOGL", "query": "Google Alphabet AI competition and launches"},
+]
+
+async def nightly_pipeline():
+    logger.info("Nightly pipeline starting...")
+    rag = BasicRAGService()
+
+    for company in TRACKED_COMPANIES:
+        try:
+            # Step 1: Ingest fresh news
+            news_chunks = ingest_news(company["query"])
+            rag.store_documents(news_chunks)
+            logger.info(f"News ingested for {company['name']}: {len(news_chunks)} chunks")
+
+            # Step 2: Ingest SEC filing
+            sec_chunks = ingest_sec_filing(company["ticker"])
+            rag.store_documents(sec_chunks)
+            logger.info(f"SEC filing ingested for {company['name']}: {len(sec_chunks)} chunks")
+
+            # Step 3: Generate intelligence report
+            result = rag.query(company["query"])
+            
+            logger.info(f"Report Output Keys: {result.keys()}")
+            logger.info(f"Cache Hit?: {result.get('cache_hit')}")
+
+            logger.info(f"Nightly report generated for {company['name']}")
+
+        except Exception as e:
+            logger.error(f"Nightly pipeline failed for {company['name']}: {repr(e)}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+    logger.info("Nightly pipeline complete.")
 
 # ── Application Initialization ────────────────────────────────────────────────
 # FastAPI() creates the ASGI application object. The title and version appear
@@ -39,3 +91,20 @@ app = FastAPI(
 # If we had multiple route modules (e.g., for users, reports, settings),
 # we would call include_router() once for each, keeping concerns separated.
 app.include_router(router)
+
+@app.on_event("startup")
+async def startup_event():
+    scheduler.add_job(
+        nightly_pipeline,
+        CronTrigger(hour=2, minute=0),
+        id="nightly_pipeline",
+        replace_existing=True
+    )
+    scheduler.start()
+    logger.info("Scheduler started. Nightly pipeline scheduled at 2:00 AM.")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    scheduler.shutdown()
+    logger.info("Scheduler stopped.")

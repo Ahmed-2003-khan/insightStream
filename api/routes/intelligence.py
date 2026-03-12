@@ -207,17 +207,16 @@ async def intelligence_query(request: QueryRequest, api_key: str = Depends(get_a
         # Delegate entirely to the RAG service. The route stays thin — it is
         # responsible only for HTTP concerns (parsing, error shaping, response
         # formatting). All intelligence logic lives in rag_service.query().
-        answer = rag_service.query(request.query)
+        answer_dict = rag_service.query(request.query)
 
     except Exception as e:
         # Convert any RAG-layer or network exception into a structured 500 so
         # the client always receives JSON, never an unhandled Python traceback.
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Wrap the answer in a keyed dict. A bare string response is harder to extend;
-    # a dict lets us add "sources", "confidence", or "retrieved_chunks" keys in
-    # future versions without breaking clients that already parse {"answer": "..."}.
-    return {"answer": answer}
+    # Return the exact dictionary returned by the RAG service which now 
+    # includes "report", "cache_hit", "signal_label", and "signal_confidence".
+    return answer_dict
 
 @router.get("/api/v1/intelligence/reports")
 def get_reports(
