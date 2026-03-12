@@ -15,10 +15,14 @@ which prevents our evaluation script from crashing due to unexpected formatting.
 """
 
 import os
+import sys
 import json
 import requests
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+
+stage = sys.argv[1] if len(sys.argv) > 1 else "stage3"
+output_file = f"eval/eval_results_{stage}.json"
 
 # Import LangChain primitives for OpenAI and Prompting
 from langchain_openai import ChatOpenAI
@@ -176,7 +180,7 @@ def run_evaluation():
 
     # ── 4. Save and Summarize ─────────────────────────────────────────────────
     # Write the detailed grading report to a new JSON file
-    output_path = os.path.join("eval", "eval_results_stage3.json")
+    output_path = output_file
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results_to_save, f, indent=2)
 
