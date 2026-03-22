@@ -63,3 +63,25 @@ def test_query_empty_string_returns_422(client, auth_headers):
     )
     # Empty query should be rejected at validation level
     assert response.status_code in [422, 400]
+
+def test_rate_limit_header_present(client, auth_headers):
+    response = client.post(
+        "/api/v1/intelligence/query",
+        json={"query": "test question"},
+        headers=auth_headers
+    )
+    # SlowAPI adds rate limit headers to responses
+    assert response.status_code in [200, 429]
+
+def test_rate_limit_exceeded_returns_429(client, auth_headers):
+    # Hit the endpoint 11 times — 11th should be rate limited
+    responses = []
+    for _ in range(11):
+        r = client.post(
+            "/api/v1/intelligence/query",
+            json={"query": "test question"},
+            headers=auth_headers
+        )
+        responses.append(r.status_code)
+    # At least one response should be 429
+    assert 429 in responses

@@ -6,14 +6,17 @@ Application entry point for InsightStream.
 This file is intentionally thin. Its only responsibilities are:
   1. Create the FastAPI application instance.
   2. Register all routers (route modules) onto that instance.
-  3. (Optionally) configure global middleware, CORS, or startup/shutdown events.
+  3. Configure global middleware, CORS, rate limiting, and startup/shutdown events.
 
-All actual routing logic lives in api/routes.py, keeping this file clean
-and easy to extend as the project grows.
+All actual routing logic lives in api/routes/intelligence.py.
 """
 
 from fastapi import FastAPI
-from api.routes.intelligence import router
+from fastapi.middleware.cors import CORSMiddleware
+
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from core_backend.limiter import limiter
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -22,16 +25,21 @@ from ingestion_pipeline.sec_loader import ingest_sec_filing
 from services.rag_service import BasicRAGService
 from core_backend.database import SessionLocal
 from core_backend.models import Report
+from datetime import datetime
+from services.cache_service import clear_cache
 import logging
 import sys
 
 logging.basicConfig(
-    stream=sys.stdout, 
-    level=logging.INFO, 
+    stream=sys.stdout,
+    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
+
+# ── Rate Limiter ──────────────────────────────────────────────────────────────
+# Imported from core_backend.limiter to avoid circular imports with routes.
 
 TRACKED_COMPANIES = [
     {"name": "Microsoft", "ticker": "MSFT"},
@@ -39,13 +47,10 @@ TRACKED_COMPANIES = [
     {"name": "Google",    "ticker": "GOOGL"},
 ]
 
-from datetime import datetime
-from services.cache_service import clear_cache
-
 async def nightly_pipeline():
     logger.info("Nightly pipeline starting...")
 
-    # Fix 2A: Clear cache before pipeline so fresh data is used
+    # Clear cache before pipeline so fresh data is used
     cleared = clear_cache()
     logger.info(f"Cache cleared: {cleared} keys removed")
 
@@ -54,7 +59,7 @@ async def nightly_pipeline():
 
     for company in TRACKED_COMPANIES:
         try:
-            # Fix 2B: SEC only on Mondays
+            # SEC only on Mondays
             if is_monday:
                 sec_chunks = ingest_sec_filing(company["ticker"])
                 rag.store_documents(sec_chunks)
@@ -63,6 +68,7 @@ async def nightly_pipeline():
                 logger.info(f"SEC skipped for {company['name']} — not Monday")
 
             # Query planner generates dynamic query via LangGraph
+            from ai_orchestration.graph import intelligence_graph
             result = intelligence_graph.invoke({
                 "company_name": company["name"],
                 "planned_query": "",
@@ -83,11 +89,6 @@ async def nightly_pipeline():
     logger.info("Nightly pipeline complete.")
 
 # ── Application Initialization ────────────────────────────────────────────────
-# FastAPI() creates the ASGI application object. The title and version appear
-# in the auto-generated OpenAPI docs (accessible at /docs once the server is
-# running), which makes the API self-documenting out of the box.
-from fastapi.middleware.cors import CORSMiddleware
-
 app = FastAPI(
     title="InsightStream Intelligence API",
     version="1.0.0",
@@ -97,6 +98,13 @@ app = FastAPI(
     ),
 )
 
+# ── Rate Limiting ─────────────────────────────────────────────────────────────
+# Attach limiter to app state so SlowAPI can find it,
+# and register the 429 exception handler.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -106,11 +114,7 @@ app.add_middleware(
 )
 
 # ── Router Registration ───────────────────────────────────────────────────────
-# include_router() mounts all routes defined in api/routes.py onto the app.
-# Because the full path (/api/v1/intelligence/query) is already declared on
-# each endpoint inside routes.py, we do not need to add a prefix here.
-# If we had multiple route modules (e.g., for users, reports, settings),
-# we would call include_router() once for each, keeping concerns separated.
+from api.routes.intelligence import router
 app.include_router(router)
 
 @app.on_event("startup")
