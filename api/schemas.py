@@ -7,7 +7,7 @@ Centralising all models here keeps routes.py focused purely on routing logic
 and makes schemas easy to reuse across multiple route modules as the API grows.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
@@ -45,7 +45,7 @@ class QueryRequest(BaseModel):
                e.g. "What is TechNova's latest product launch?"
     """
 
-    query: str
+    query: str = Field(..., min_length=1, description="Non-empty search query")
 
 
 class NewsIngestRequest(BaseModel):
