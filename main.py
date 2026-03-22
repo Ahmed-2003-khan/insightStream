@@ -86,6 +86,8 @@ async def nightly_pipeline():
 # FastAPI() creates the ASGI application object. The title and version appear
 # in the auto-generated OpenAPI docs (accessible at /docs once the server is
 # running), which makes the API self-documenting out of the box.
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="InsightStream Intelligence API",
     version="1.0.0",
@@ -93,6 +95,14 @@ app = FastAPI(
         "A Retrieval-Augmented Generation (RAG) API that answers competitive "
         "intelligence queries by grounding LLM responses in curated knowledge."
     ),
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ── Router Registration ───────────────────────────────────────────────────────
