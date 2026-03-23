@@ -1,0 +1,30 @@
+Model: DistilBERT fine-tuned on AG News
+Labels: 0=GEOPOLITICAL, 1=EARNINGS, 2=PRODUCT_LAUNCH
+Best hyperparams: {'learning_rate': 2.1723933678345544e-05, 'batch_size': 16, 'weight_decay': 0.027941363228999785}
+Final eval accuracy: 93.54%
+
+============================================================
+DETAILED EVALUATION
+============================================================
+
+                precision    recall  f1-score   support
+
+  GEOPOLITICAL     0.9615    0.9600    0.9608      1900
+      EARNINGS     0.9291    0.9105    0.9197      1900
+PRODUCT_LAUNCH     0.9160    0.9358    0.9258      1900
+
+      accuracy                         0.9354      5700
+     macro avg     0.9355    0.9354    0.9354      5700
+  weighted avg     0.9355    0.9354    0.9354      5700
+
+PER-CLASS F1 SCORES:
+  GEOPOLITICAL: 0.9608
+  EARNINGS: 0.9197
+  PRODUCT_LAUNCH: 0.9258
+
+Strongest: GEOPOLITICAL (0.9608)
+Weakest:   EARNINGS (0.9197)
+
+Known Limitation:
+EARNINGS and PRODUCT_LAUNCH share vocabulary causing
+some misclassification between these two classes.

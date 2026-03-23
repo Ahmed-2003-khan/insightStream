@@ -100,7 +100,22 @@ Fixed character splits lose sentence context at boundaries. Tiktoken-based split
 - **Labels:** GEOPOLITICAL (World), EARNINGS (Business), PRODUCT_LAUNCH (Sci/Tech)
 - **Hyperparameter search:** Optuna — 3 trials over learning_rate, batch_size, weight_decay
 - **Final training:** 4 epochs with best hyperparameters, load_best_model_at_end
-- **Evaluation:** Classification report + confusion matrix (see ml_models/model_card.txt)
+
+**Evaluation Results (Test Set — 5,700 samples):**
+
+| Class | Precision | Recall | F1 Score |
+|---|---|---|---|
+| GEOPOLITICAL | 0.9615 | 0.9600 | 0.9608 |
+| EARNINGS | 0.9291 | 0.9105 | 0.9197 |
+| PRODUCT_LAUNCH | 0.9160 | 0.9358 | 0.9258 |
+| **Overall Accuracy** | | | **0.9354** |
+
+![Confusion Matrix](ml_models/confusion_matrix.png)
+
+**Known Limitation:**
+EARNINGS and PRODUCT_LAUNCH share business vocabulary causing some cross-class
+misclassification — both categories discuss companies and announcements.
+This is documented in `ml_models/model_card.txt`.
 
 ---
 
