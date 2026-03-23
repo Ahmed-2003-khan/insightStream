@@ -195,10 +195,11 @@ class BasicRAGService:
         cached = get_cached(user_prompt)
         if cached:
             return {
-                "report": cached, 
-                "cache_hit": True, 
-                "signal_label": "CACHED", 
-                "signal_confidence": 0.0
+                "report":             cached, 
+                "cache_hit":          True, 
+                "signal_label":       "CACHED", 
+                "signal_confidence":  0.0,
+                "contexts":           []
             }
 
         # We construct the initial AgentState to feed into the graph
@@ -239,10 +240,17 @@ class BasicRAGService:
         finally:
             db.close()
         
+        # Extract context strings from search results
+        contexts = [
+            r.get("content", "") 
+            for r in result.get("search_results", [])
+        ]
+
         # The node writer_agent populates "final_report" at the end of the graph execution
         return {
-            "report": result["final_report"], 
-            "cache_hit": False, 
-            "signal_label": result["signal_label"], 
-            "signal_confidence": result["signal_confidence"]
+            "report":             result["final_report"], 
+            "cache_hit":          False, 
+            "signal_label":       result.get("signal_label", "UNKNOWN"), 
+            "signal_confidence":  result.get("signal_confidence", 0.0),
+            "contexts":           contexts
         }

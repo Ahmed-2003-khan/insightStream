@@ -44,6 +44,9 @@ test.db
 # Node.js dependencies
 node_modules/
 
+# RAGAS eval results
+eval/ragas_results_*.json
+
 # Next.js build output
 .next/
 

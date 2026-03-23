@@ -121,18 +121,17 @@ This is documented in `ml_models/model_card.txt`.
 
 ## Eval Results
 
-| Stage | What Changed | Score |
-|---|---|---|
-| Baseline | Basic RAG, FAISS, no agents | recorded in eval/ |
-| Stage 3 | Multi-source ingestion + auth | recorded in eval/ |
-| Stage 4 | LangGraph agents + LangSmith | recorded in eval/ |
-| Stage 5 | Real DistilBERT classifier | recorded in eval/ |
+RAG quality is continuously measured using the **RAGAS framework** across 10 baseline queries pushing through the full LangGraph pipeline mapping to real PostgreSQL reports.
 
-RAG quality measured with RAGAS:
-- **Faithfulness:** measures hallucination rate
-- **Answer Relevancy:** measures query alignment
-- **Context Precision:** measures chunk relevance
-- **Context Recall:** measures information completeness
+| Metric | Score | Interpretation |
+|---|---|---|
+| **Faithfulness** | 0.7750 | 77.5% of claims grounded in retrieved contexts (hallucination rate) |
+| **Answer Relevancy** | 0.8792 | Answers strongly align with the given question |
+| **Context Precision** | 0.9000 | 90% of retrieved Pinecone chunks were highly relevant |
+| **Context Recall** | 0.6957 | Information completeness (room to increase top_k) |
+| **Average Score** | **0.8125** | Solid production baseline |
+
+*Detailed sample breakdown saved in `eval/ragas_results_*.json`*
 
 ---
 

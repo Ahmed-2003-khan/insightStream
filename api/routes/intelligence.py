@@ -120,11 +120,17 @@ async def intelligence_query(
     Rate limit: 10/minute per IP.
     """
     try:
-        answer_dict = rag_service.query(body.query)
+        result = rag_service.query(body.query)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    return answer_dict
+    return {
+        "report":            result["report"],
+        "cache_hit":         result["cache_hit"],
+        "signal_label":      result["signal_label"],
+        "signal_confidence": result["signal_confidence"],
+        "contexts":          result.get("contexts", [])
+    }
 
 
 # ── Reports Endpoint ──────────────────────────────────────────────────────────
