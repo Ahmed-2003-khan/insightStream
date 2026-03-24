@@ -142,9 +142,6 @@ def writer_agent(state: AgentState) -> AgentState:
     Node 4: Uses a generative LLM to synthesize all context and signals into
     a structured intelligence report.
     """
-    logger.info("[Node: writer_agent] Drafting final intelligence report.")
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    
     query = state["query"]
     label = state["signal_label"]
     confidence = state["signal_confidence"]
@@ -153,25 +150,25 @@ def writer_agent(state: AgentState) -> AgentState:
     # Format the evidence string for the prompt
     evidence = ""
     for idx, res in enumerate(state["search_results"], 1):
-        evidence += f"Source {idx} ({res['source']}):\\n{res['content']}\\n\\n"
+        evidence += f"Source {idx} ({res['source']}):\n{res['content']}\n\n"
         
     # Inject a transparency note if graph took extreme measures
     fallback_note = ""
     if retry_count > 0:
-        fallback_note = "\\nNOTE: Initial local data was insufficient. The system automatically fetched fresh external news data to fulfill this request.\\n"
+        fallback_note = "\nNOTE: Initial local data was insufficient. The system automatically fetched fresh external news data to fulfill this request.\n"
 
     system_prompt = (
         "You are an expert intelligence analyst summarizing information for executives. "
         "You must output a structured intelligence report with exactly these four sections: "
-        "\\n1. Summary\\n2. Key Evidence\\n3. Signal Classification\\n4. Strategic Implication\\n"
+        "\n1. Summary\n2. Key Evidence\n3. Signal Classification\n4. Strategic Implication\n"
         "Do not include any other text."
     )
     
     user_prompt = (
-        f"Query: {query}\\n\\n"
-        f"AI Signal Classifier Output: {label} (Confidence: {confidence})\\n"
-        f"{fallback_note}\\n"
-        f"Evidence Context:\\n{evidence}"
+        f"Query: {query}\n\n"
+        f"AI Signal Classifier Output: {label} (Confidence: {confidence})\n"
+        f"{fallback_note}\n"
+        f"Evidence Context:\n{evidence}"
     )
         
     response = llm.invoke([
