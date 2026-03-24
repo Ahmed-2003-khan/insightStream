@@ -5,6 +5,12 @@ import os
 import torch
 from transformers import DistilBertForSequenceClassification, DistilBertTokenizerFast
 
+# @traceable injects this local ML model into LangSmith traces.
+# Without this, LangSmith only captures LLM calls — the DistilBERT
+# execution would be invisible. With this, every prediction shows up
+# in the LangGraph waterfall: input text, signal label, confidence, latency.
+from langsmith import traceable
+
 LABEL_MAP = {0: 'GEOPOLITICAL', 1: 'EARNINGS', 2: 'PRODUCT_LAUNCH'}
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'best_checkpoint')
 
@@ -14,6 +20,7 @@ class SignalClassifier:
         self.model = DistilBertForSequenceClassification.from_pretrained(MODEL_PATH)
         self.model.eval()
 
+    @traceable(run_type="chain", name="DistilBERT Signal Classifier")
     def predict(self, text: str) -> dict:
         inputs = self.tokenizer(
             text,
