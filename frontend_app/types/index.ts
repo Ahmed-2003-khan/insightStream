@@ -1,7 +1,13 @@
 export interface Report {
   id: number
   query: string
-  signal_label: 'EARNINGS' | 'PRODUCT_LAUNCH' | 'GEOPOLITICAL' | 'CACHED' | 'UNKNOWN'
+  signal_label:
+    | 'EARNINGS'
+    | 'PRODUCT_LAUNCH'
+    | 'GEOPOLITICAL'
+    | 'CACHED'
+    | 'NONE'
+    | 'UNKNOWN'
   confidence: number
   report_text: string
   sources: string
