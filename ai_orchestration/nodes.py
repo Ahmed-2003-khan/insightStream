@@ -6,12 +6,12 @@ Every node accepts the shared AgentState and returns the updated AgentState.
 """
 
 import logging
+import os
 from ai_orchestration.state import AgentState
 from services.rag_service import BasicRAGService
 from ingestion_pipeline.news_loader import ingest_news
 from ml_models.signal_classifier import SignalClassifier
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -142,39 +142,47 @@ def writer_agent(state: AgentState) -> AgentState:
     Node 4: Uses a generative LLM to synthesize all context and signals into
     a structured intelligence report.
     """
-    query = state["query"]
-    label = state["signal_label"]
-    confidence = state["signal_confidence"]
-    retry_count = state["retry_count"]
-    
-    # Format the evidence string for the prompt
-    evidence = ""
-    for idx, res in enumerate(state["search_results"], 1):
-        evidence += f"Source {idx} ({res['source']}):\n{res['content']}\n\n"
-        
-    # Inject a transparency note if graph took extreme measures
-    fallback_note = ""
-    if retry_count > 0:
-        fallback_note = "\nNOTE: Initial local data was insufficient. The system automatically fetched fresh external news data to fulfill this request.\n"
+    logger.info("[Node: writer_agent] Drafting final intelligence report.")
 
-    system_prompt = (
-        "You are an expert intelligence analyst summarizing information for executives. "
-        "You must output a structured intelligence report with exactly these four sections: "
-        "\n1. Summary\n2. Key Evidence\n3. Signal Classification\n4. Strategic Implication\n"
-        "Do not include any other text."
+    llm = ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0,
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
     )
-    
-    user_prompt = (
-        f"Query: {query}\n\n"
-        f"AI Signal Classifier Output: {label} (Confidence: {confidence})\n"
-        f"{fallback_note}\n"
-        f"Evidence Context:\n{evidence}"
-    )
-        
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt)
-    ])
-    
+
+    history = state.get("conversation_history", [])
+    history_text = ""
+    if history:
+        history_text = "\nPrevious conversation:\n"
+        for msg in history[-4:]:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")[:200]
+            history_text += f"{role.upper()}: {content}\n"
+        history_text += "\n"
+
+    prompt = f"""{history_text}Current query: {state['query']}
+
+Evidence from retrieved sources:
+{chr(10).join([f"[{r.get('source','unknown')}]: {r.get('content','')}" for r in state['search_results']])}
+
+Signal Classification: {state['signal_label']} (confidence: {state['signal_confidence']})
+{"Note: Fresh news was automatically fetched for this query." if state['retry_count'] > 0 else ""}
+
+Write a structured intelligence report with exactly these four sections:
+
+SUMMARY:
+[2-3 sentences — if there is conversation history, make sure this response is contextually connected]
+
+KEY EVIDENCE:
+[specific facts from the sources]
+
+SIGNAL CLASSIFICATION:
+[explain why this signal label was assigned]
+
+STRATEGIC IMPLICATION:
+[what this means for competitors]
+"""
+
+    response = llm.invoke(prompt)
     state["final_report"] = response.content
     return state

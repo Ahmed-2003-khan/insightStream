@@ -19,3 +19,4 @@ class AgentState(TypedDict):
     signal_confidence: float
     final_report: str
     retry_count: int
+    conversation_history: list

@@ -20,20 +20,28 @@ class SignalClassifier:
         self.model = DistilBertForSequenceClassification.from_pretrained(MODEL_PATH)
         self.model.eval()
 
-    @traceable(run_type="chain", name="DistilBERT Signal Classifier")
+        # Define the traced function inside __init__ so it uses self.tokenizer
+        # and self.model via closure. This prevents LangSmith from trying to
+        # JSON-serialize `self` (which crashes because PyTorch models aren't serializable).
+        @traceable(run_type="chain", name="DistilBERT Signal Classifier")
+        def _predict_traced(text: str) -> dict:
+            inputs = self.tokenizer(
+                text,
+                return_tensors='pt',
+                truncation=True,
+                max_length=128,
+                padding=True
+            )
+            with torch.no_grad():
+                logits = self.model(**inputs).logits
+            probs = torch.softmax(logits, dim=-1)
+            confidence, predicted_class = torch.max(probs, dim=-1)
+            return {
+                'label': LABEL_MAP[predicted_class.item()],
+                'confidence': round(confidence.item(), 4)
+            }
+        
+        self._predict_traced = _predict_traced
+
     def predict(self, text: str) -> dict:
-        inputs = self.tokenizer(
-            text,
-            return_tensors='pt',
-            truncation=True,
-            max_length=128,
-            padding=True
-        )
-        with torch.no_grad():
-            logits = self.model(**inputs).logits
-        probs = torch.softmax(logits, dim=-1)
-        confidence, predicted_class = torch.max(probs, dim=-1)
-        return {
-            'label': LABEL_MAP[predicted_class.item()],
-            'confidence': round(confidence.item(), 4)
-        }
+        return self._predict_traced(text)

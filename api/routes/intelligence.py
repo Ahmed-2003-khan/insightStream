@@ -110,7 +110,7 @@ async def ingest_sec_ticker(
 
 @router.post("/api/v1/intelligence/query")
 @limiter.limit("10/minute")
-async def intelligence_query(
+async def query(
     request: Request,
     body: QueryRequest,
     api_key: str = Depends(get_api_key)
@@ -120,7 +120,10 @@ async def intelligence_query(
     Rate limit: 10/minute per IP.
     """
     try:
-        result = rag_service.query(body.query)
+        result = rag_service.query(
+            user_prompt          = body.query,
+            conversation_history = [msg.model_dump() for msg in body.conversation_history],
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -129,7 +132,7 @@ async def intelligence_query(
         "cache_hit":         result["cache_hit"],
         "signal_label":      result["signal_label"],
         "signal_confidence": result["signal_confidence"],
-        "contexts":          result.get("contexts", [])
+        "contexts":          result.get("contexts", []),
     }
 
 

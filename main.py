@@ -77,7 +77,8 @@ async def nightly_pipeline():
                 "signal_label": "",
                 "signal_confidence": 0.0,
                 "final_report": "",
-                "retry_count": 0
+                "retry_count": 0,
+                "conversation_history": [],
             })
             logger.info(f"Planned query for {company['name']}: {result['planned_query']}")
             logger.info(f"Report generated for {company['name']}: {result['signal_label']}")

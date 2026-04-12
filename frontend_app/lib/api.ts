@@ -11,8 +11,14 @@ const client = axios.create({
   }
 })
 
-export async function queryIntelligence(query: string) {
-  const res = await client.post('/api/v1/intelligence/query', { query })
+export async function queryIntelligence(
+  query: string,
+  conversation_history: { role: string; content: string }[] = []
+) {
+  const res = await client.post('/api/v1/intelligence/query', {
+    query,
+    conversation_history
+  })
   return res.data
 }
 

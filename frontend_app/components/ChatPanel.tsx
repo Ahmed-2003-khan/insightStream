@@ -4,11 +4,16 @@ import { queryIntelligence } from '@/lib/api'
 import SignalBadge from './SignalBadge'
 
 interface Message {
-  role: 'user' | 'assistant'
-  content: string
-  signal_label?: string
+  role:               'user' | 'assistant'
+  content:            string
+  signal_label?:      string
   signal_confidence?: number
-  cache_hit?: boolean
+  cache_hit?:         boolean
+}
+
+interface ConversationMessage {
+  role:    string
+  content: string
 }
 
 export default function ChatPanel() {
@@ -20,21 +25,35 @@ export default function ChatPanel() {
     if (!input.trim() || loading) return
     const userMsg = input.trim()
     setInput('')
-    setMessages(prev => [...prev, { role: 'user', content: userMsg }])
+
+    const updatedMessages = [
+      ...messages,
+      { role: 'user' as const, content: userMsg }
+    ]
+    setMessages(updatedMessages)
     setLoading(true)
 
+    // Build conversation history for API
+    // Only send last 6 messages — keep context window manageable
+    const history: ConversationMessage[] = updatedMessages
+      .slice(-6)
+      .map(m => ({
+        role:    m.role,
+        content: m.content.slice(0, 300) // truncate long reports
+      }))
+
     try {
-      const data = await queryIntelligence(userMsg)
+      const data = await queryIntelligence(userMsg, history)
       setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: data.report,
-        signal_label: data.signal_label,
-        signal_confidence: data.signal_confidence,
-        cache_hit: data.cache_hit
+        role:               'assistant',
+        content:            data.report,
+        signal_label:       data.signal_label,
+        signal_confidence:  data.signal_confidence,
+        cache_hit:          data.cache_hit
       }])
     } catch {
       setMessages(prev => [...prev, {
-        role: 'assistant',
+        role:    'assistant',
         content: 'Error fetching response. Is the backend running?'
       }])
     } finally {
@@ -44,8 +63,18 @@ export default function ChatPanel() {
 
   return (
     <div className="flex flex-col h-full bg-white rounded-xl border">
-      <div className="p-3 border-b">
-        <h2 className="text-sm font-semibold text-gray-500">Intelligence Chat</h2>
+      <div className="p-3 border-b flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-500">
+          Intelligence Chat
+        </h2>
+        {messages.length > 0 && (
+          <button
+            onClick={() => setMessages([])}
+            className="text-xs text-gray-400 hover:text-red-400"
+          >
+            Clear
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
@@ -54,7 +83,10 @@ export default function ChatPanel() {
           </p>
         )}
         {messages.map((msg, i) => (
-          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div
+            key={i}
+            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
             <div className={`max-w-[85%] rounded-xl px-4 py-3 text-sm ${
               msg.role === 'user'
                 ? 'bg-blue-500 text-white'
@@ -77,7 +109,7 @@ export default function ChatPanel() {
         ))}
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-gray-50 border rounded-xl px-4 py-3 text-sm text-gray-400">
+            <div className="bg-gray-50 border rounded-xl px-4 py-3 text-sm text-gray-400 animate-pulse">
               Analysing...
             </div>
           </div>

@@ -1,33 +1,39 @@
+import sys
+import types
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 # Mock Redis so tests work without Redis running
 @pytest.fixture(autouse=True)
 def mock_redis():
-    with patch("services.cache_service.client") as mock_client:
-        # Simulate in-memory cache for tests
-        store = {}
+    store = {}
+    mock_client = MagicMock()
 
-        def mock_get(key):
-            return store.get(key)
+    def mock_get(key):
+        return store.get(key)
 
-        def mock_setex(key, ttl, value):
-            store[key] = value
+    def mock_setex(key, ttl, value):
+        store[key] = value
 
-        def mock_keys(pattern):
-            prefix = pattern.replace("*", "")
-            return [k for k in store if k.startswith(prefix)]
+    def mock_keys(pattern):
+        prefix = pattern.replace("*", "")
+        return [k for k in store if k.startswith(prefix)]
 
-        def mock_delete(*keys):
-            for k in keys:
-                store.pop(k, None)
+    def mock_delete(*keys):
+        for k in keys:
+            store.pop(k, None)
 
-        mock_client.get.side_effect = mock_get
-        mock_client.setex.side_effect = mock_setex
-        mock_client.keys.side_effect = mock_keys
-        mock_client.delete.side_effect = mock_delete
+    mock_client.get.side_effect = mock_get
+    mock_client.setex.side_effect = mock_setex
+    mock_client.keys.side_effect = mock_keys
+    mock_client.delete.side_effect = mock_delete
 
-        yield mock_client
+    redis_stub = types.ModuleType("redis")
+    redis_stub.from_url = MagicMock(return_value=mock_client)
+    sys.modules["redis"] = redis_stub
+    if "services.cache_service" in sys.modules:
+        del sys.modules["services.cache_service"]
+    yield mock_client
 
 def test_cache_miss_returns_none():
     from services.cache_service import get_cached, clear_cache

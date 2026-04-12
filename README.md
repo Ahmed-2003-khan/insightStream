@@ -121,17 +121,27 @@ This is documented in `ml_models/model_card.txt`.
 
 ## Eval Results
 
-RAG quality is continuously measured using the **RAGAS framework** across 10 baseline queries pushing through the full LangGraph pipeline mapping to real PostgreSQL reports.
+**RAG Pipeline Quality — RAGAS Evaluation (10 samples):**
 
-| Metric | Score | Interpretation |
+| Metric | Score | Meaning |
 |---|---|---|
-| **Faithfulness** | 0.7750 | 77.5% of claims grounded in retrieved contexts (hallucination rate) |
-| **Answer Relevancy** | 0.8792 | Answers strongly align with the given question |
-| **Context Precision** | 0.9000 | 90% of retrieved Pinecone chunks were highly relevant |
-| **Context Recall** | 0.6957 | Information completeness (room to increase top_k) |
-| **Average Score** | **0.8125** | Solid production baseline |
+| Faithfulness | 0.7750 | 77.5% of claims grounded in retrieved chunks |
+| Answer Relevancy | 0.8792 | Answers well-aligned with queries |
+| Context Precision | 0.9000 | Retrieved chunks highly relevant |
+| Context Recall | 0.6957 | Coverage of important information |
+| **Average** | **0.8125** | Overall RAG quality score |
 
-*Detailed sample breakdown saved in `eval/ragas_results_*.json`*
+**ML Classifier — Test Set (5,700 samples):**
+
+| Class | F1 Score |
+|---|---|
+| GEOPOLITICAL | 0.9608 |
+| PRODUCT_LAUNCH | 0.9258 |
+| EARNINGS | 0.9197 |
+| **Overall Accuracy** | **93.54%** |
+
+**Manual Eval Pipeline:**
+Scored across Baseline, Stage 3, Stage 4, Stage 5 — results in `eval/` folder.
 
 ---
 

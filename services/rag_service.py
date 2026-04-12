@@ -19,7 +19,7 @@ Why Pinecone over an in-memory store?
 """
 
 import os
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -177,11 +177,15 @@ class BasicRAGService:
         self.vector_store.add_documents(documents)
         logger.info(f"Stored {len(documents)} chunks with date {today}")
 
-    def query(self, user_prompt: str) -> str:
+    def query(
+        self,
+        user_prompt: str,
+        conversation_history: Optional[List[dict]] = None,
+    ) -> dict:
         """
         Executes a RAG query by submitting the user's prompt to the compiled
         LangGraph reasoning engine (intelligence_graph).
-        
+
         The graph will automatically handle:
           1. Searching Pinecone.
           2. Fallback fetching of external data (if Pinecone is lacking).
@@ -189,68 +193,72 @@ class BasicRAGService:
           4. Final LLM synthesis of the intelligence report.
         """
         from ai_orchestration.graph import intelligence_graph
-
-        # Check cache first
         from services.cache_service import get_cached, set_cached
-        cached = get_cached(user_prompt)
-        if cached:
-            return {
-                "report":             cached, 
-                "cache_hit":          True, 
-                "signal_label":       "CACHED", 
-                "signal_confidence":  0.0,
-                "contexts":           []
-            }
-
-        # We construct the initial AgentState to feed into the graph
-        result = intelligence_graph.invoke({
-            "company_name": "",
-            "planned_query": "",
-            "query": user_prompt,
-            "search_results": [],
-            "signal_label": "",
-            "signal_confidence": 0.0,
-            "final_report": "",
-            "retry_count": 0
-        })
-
-        # Save the generated report to PostgreSQL before returning
         from core_backend.database import SessionLocal
         from core_backend.models import Report
-        
+
+        if conversation_history is None:
+            conversation_history = []
+
+        # Cache check — skip cache if conversation history exists
+        # because context changes the answer
+        if not conversation_history:
+            cached = get_cached(user_prompt)
+            if cached:
+                return {
+                    "report":            cached,
+                    "cache_hit":         True,
+                    "signal_label":      "CACHED",
+                    "signal_confidence": 0.0,
+                    "contexts":          [],
+                }
+
+        result = intelligence_graph.invoke({
+            "company_name":         "",
+            "planned_query":        "",
+            "query":                user_prompt,
+            "search_results":       [],
+            "signal_label":         "",
+            "signal_confidence":    0.0,
+            "final_report":         "",
+            "retry_count":          0,
+            "conversation_history": conversation_history,
+        })
+
+        contexts = [
+            r.get("content", "")
+            for r in result.get("search_results", [])
+        ]
+
+        # Only cache if no conversation history
+        if not conversation_history:
+            set_cached(user_prompt, result["final_report"])
+
         db = SessionLocal()
         try:
-            sources = ", ".join([r.get("source", "unknown") for r in result.get("search_results", [])])
+            sources = ", ".join([
+                r.get("source", "unknown")
+                for r in result.get("search_results", [])
+            ])
             report_record = Report(
                 query        = user_prompt,
                 signal_label = result.get("signal_label", "UNKNOWN"),
                 confidence   = result.get("signal_confidence", 0.0),
                 report_text  = result.get("final_report", ""),
-                sources      = sources
+                sources      = sources,
             )
             db.add(report_record)
             db.commit()
-
-            # Save to cache for next time
-            set_cached(user_prompt, result["final_report"])
-
         except Exception as e:
             db.rollback()
-            print(f"Database/Cache save error: {e}")
+            print(f"Database save error: {e}")
         finally:
             db.close()
-        
-        # Extract context strings from search results
-        contexts = [
-            r.get("content", "") 
-            for r in result.get("search_results", [])
-        ]
 
-        # The node writer_agent populates "final_report" at the end of the graph execution
         return {
-            "report":             result["final_report"], 
-            "cache_hit":          False, 
-            "signal_label":       result.get("signal_label", "UNKNOWN"), 
-            "signal_confidence":  result.get("signal_confidence", 0.0),
-            "contexts":           contexts
+            "report":            result["final_report"],
+            "cache_hit":         False,
+            "signal_label":      result.get("signal_label", "UNKNOWN"),
+            "signal_confidence": result.get("signal_confidence", 0.0),
+            "contexts":          contexts,
         }

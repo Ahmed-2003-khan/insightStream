@@ -11,6 +11,12 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
+
+class ConversationMessage(BaseModel):
+    role: str
+    content: str
+
+
 class ReportItem(BaseModel):
     id:           int
     query:        str
@@ -43,9 +49,11 @@ class QueryRequest(BaseModel):
     Attributes:
         query: The natural-language question the user wants answered,
                e.g. "What is TechNova's latest product launch?"
+        conversation_history: Prior turns so follow-up questions stay in context.
     """
 
     query: str = Field(..., min_length=1, description="Non-empty search query")
+    conversation_history: List[ConversationMessage] = Field(default_factory=list)
 
 
 class NewsIngestRequest(BaseModel):

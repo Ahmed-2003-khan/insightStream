@@ -1,7 +1,9 @@
 import pytest
 import os
+import sys
+import types
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 os.environ["OPENAI_API_KEY"]      = "test-key"
 os.environ["PINECONE_API_KEY"]    = "test-key"
@@ -20,19 +22,24 @@ def client():
     engine = create_engine("sqlite:///./test.db", connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
 
-    # Mock heavy dependencies before importing app
-    with patch("services.rag_service.BasicRAGService") as mock_rag, \
-         patch("pinecone.Pinecone") as mock_pinecone:
+    mock_instance = MagicMock()
+    mock_instance.query.return_value = {
+        "report": "Test report content",
+        "cache_hit": False,
+        "signal_label": "EARNINGS",
+        "signal_confidence": 0.87,
+        "contexts": [],
+    }
+    rag_stub = types.ModuleType("services.rag_service")
+    rag_stub.BasicRAGService = MagicMock(return_value=mock_instance)
+    sys.modules["services.rag_service"] = rag_stub
 
-        mock_rag.return_value.query.return_value = {
-            "report": "Test report content",
-            "cache_hit": False,
-            "signal_label": "EARNINGS",
-            "signal_confidence": 0.87
-        }
+    pine_stub = types.ModuleType("pinecone")
+    pine_stub.Pinecone = MagicMock()
+    sys.modules["pinecone"] = pine_stub
 
-        from main import app
-        return TestClient(app)
+    from main import app
+    return TestClient(app)
 
 @pytest.fixture
 def auth_headers():
