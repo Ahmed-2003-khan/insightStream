@@ -11,6 +11,9 @@ This file is intentionally thin. Its only responsibilities are:
 All actual routing logic lives in api/routes/intelligence.py.
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
