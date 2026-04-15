@@ -164,7 +164,7 @@ export default function Dashboard() {
             )}
           </header>
 
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-5 py-4 sm:px-8 sm:py-5">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4 sm:px-8 sm:py-5">
             {loading ? (
               <div className="is-card flex h-40 shrink-0 animate-pulse items-center justify-center rounded-2xl">
                 <p className="text-sm text-slate-500">Loading intelligence feed…</p>
@@ -175,8 +175,8 @@ export default function Dashboard() {
               </div>
             )}
 
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden xl:grid xl:grid-cols-12 xl:grid-rows-1 xl:items-stretch">
-              <section className="flex max-h-[42vh] min-h-0 flex-col gap-3 overflow-hidden max-xl:shrink-0 xl:col-span-5 xl:h-full xl:max-h-none">
+            <div className="flex min-h-[500px] flex-1 flex-col gap-4 xl:grid xl:grid-cols-12 xl:grid-rows-1 xl:items-stretch">
+              <section className="flex flex-col gap-3 max-xl:shrink-0 xl:col-span-5 xl:h-full">
                 <div className="flex items-baseline justify-between gap-2">
                   <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">
                     Report archive
